@@ -53,31 +53,31 @@ compile_atf() {
 	#       might have been backported to one and not the other. what a freaking life.
 	#       test both -- and only add it if _both_ support it
 	function gcc_accepts_flag() {
-		{ echo 'int main(){}' | "${ATF_COMPILER}gcc" -Wl,"$1" -x c - -o /dev/null > /dev/null 2>&1; } && return 0
+		{ echo 'int main(){}' | "${ATF_COMPILER}gcc" -nostdlib -Wl,"$1" -x c - -o /dev/null > /dev/null 2>&1; } && return 0
 		return 1
 	}
 	function ld_supports_flag() {
 		{ "$("${ATF_COMPILER}gcc" -print-prog-name=ld)" --help 2> /dev/null | grep -q -- "$1"; } && return 0
 		return 1
 	}
-	if gcc_accepts_flag --no-warn-rwx-segment; then
-		display_alert "GCC supports '--no-warn-rwx-segment'" "gcc:yes - ld:tba" "debug"
-		if ld_supports_flag no-warn-rwx-segment; then
-			display_alert "GCC/LD supports '--no-warn-rwx-segment'" "gcc:yes - ld:yes" "debug"
+	if gcc_accepts_flag --no-warn-rwx-segments; then
+		display_alert "GCC supports '--no-warn-rwx-segments'" "gcc:yes - ld:tba" "debug"
+		if ld_supports_flag no-warn-rwx-segments; then
+			display_alert "GCC/LD supports '--no-warn-rwx-segments'" "gcc:yes - ld:yes" "debug"
 			if [[ "${ATF_SKIP_LDFLAGS:-"no"}" == "yes" ]]; then # IF ATF_SKIP_LDFLAGS==yes, then skip it completely
-				display_alert "Skip adding LD flag '--no-warn-rwx-segment' to TF-A build" "ATF_SKIP_LDFLAGS=${ATF_SKIP_LDFLAGS}" "info"
+				display_alert "Skip adding LD flag '--no-warn-rwx-segments' to TF-A build" "ATF_SKIP_LDFLAGS=${ATF_SKIP_LDFLAGS}" "info"
 			elif [[ "${ATF_SKIP_LDFLAGS_WL:-"no"}" == "yes" ]]; then # IF ATF_SKIP_LDFLAGS_WL==yes, then don't add the -Wl, prefix
-				display_alert "Skip adding '-Wl,' prefix to LD flag '--no-warn-rwx-segment' for TF-A build" "ATF_SKIP_LDFLAGS_WL=${ATF_SKIP_LDFLAGS_WL}" "info"
-				binutils_flags_atf="--no-warn-rwx-segment"
+				display_alert "Skip adding '-Wl,' prefix to LD flag '--no-warn-rwx-segments' for TF-A build" "ATF_SKIP_LDFLAGS_WL=${ATF_SKIP_LDFLAGS_WL}" "info"
+				binutils_flags_atf="--no-warn-rwx-segments"
 			else
-				display_alert "Adding full LD flag '-Wl,--no-warn-rwx-segment' to TF-A build" "normal" "info"
-				binutils_flags_atf="-Wl,--no-warn-rwx-segment"
+				display_alert "Adding full LD flag '-Wl,--no-warn-rwx-segments' to TF-A build" "normal" "info"
+				binutils_flags_atf="-Wl,--no-warn-rwx-segments"
 			fi
 		else
-			display_alert "LD does not support '--no-warn-rwx-segment'" "gcc: yes - ld:no" "debug"
+			display_alert "LD does not support '--no-warn-rwx-segments'" "gcc: yes - ld:no" "debug"
 		fi
 	else
-		display_alert "GCC does not support '--no-warn-rwx-segment'" "gcc: no - ld: not tested" "debug"
+		display_alert "GCC does not support '--no-warn-rwx-segments'" "gcc: no - ld: not tested" "debug"
 	fi
 	unset -f gcc_accepts_flag ld_supports_flag
 

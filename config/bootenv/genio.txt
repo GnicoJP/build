@@ -1,5 +1,4 @@
-verbosity=1
+verbosity=7
 bootlogo=false
 console=both
-
-
+extraargs=kpti=off nokaslr

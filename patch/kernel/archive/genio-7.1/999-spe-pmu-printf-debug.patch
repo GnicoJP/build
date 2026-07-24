@@ -1,0 +1,148 @@
+--- a/drivers/perf/arm_spe_pmu.c	2026-07-20 11:08:48.664402752 +0900
++++ b/drivers/perf/arm_spe_pmu.c	2026-07-20 15:15:31.197707748 +0900
+@@ -745,14 +745,54 @@
+ 	return ret;
+ }
+ 
++#include <linux/io.h>
++
++static void __iomem *spe_diag_gicr_base[8];
++
++static void spe_diag_init_mmio(void)
++{
++	int cpu;
++	for (cpu = 0; cpu < 8; cpu++) {
++		phys_addr_t addr = 0x0c040000ULL + (u64)cpu * 0x20000ULL + 0x10200ULL;
++		if (!spe_diag_gicr_base[cpu])
++			spe_diag_gicr_base[cpu] = ioremap(addr, 4);
++	}
++}
++
++static void spe_diag_dump_status(const char *tag)
++{
++	int cpu = smp_processor_id();
++	u32 val = 0xFFFFFFFF;
++	u64 pmbsr, pmsbptr, pmblimitr, pmscr;
++
++	spe_diag_init_mmio();
++
++	if (cpu >= 0 && cpu < 8 && spe_diag_gicr_base[cpu])
++		val = readl_relaxed(spe_diag_gicr_base[cpu]);
++
++	pmbsr = read_sysreg_s(SYS_PMBSR_EL1);
++	pmsbptr = read_sysreg_s(SYS_PMBPTR_EL1);
++	pmblimitr = read_sysreg_s(SYS_PMBLIMITR_EL1);
++	pmscr = read_sysreg_s(SYS_PMSCR_EL1);
++
++	pr_info("SPE_DIAG [%s] CPU %d: GICR_ISPENDR0=0x%08x (PPI_15-0=0x%04x: PPI5=%d PPI7=%d PPI10=%d), PMSCR=0x%llx, PMBSR=0x%llx (S=%d, COLL=%d), PMBPTR=0x%llx, PMBLIMITR=0x%llx\n",
++		tag, cpu, val, (val >> 16) & 0xFFFF,
++		!!(val & BIT(21)), !!(val & BIT(23)), !!(val & BIT(26)),
++		pmscr, pmbsr, (int)(pmbsr & 1), (int)!!(pmbsr & BIT(16)),
++		pmsbptr, pmblimitr);
++}
++
++static void __arm_spe_pmu_reset_local(int irq);
++
+ static irqreturn_t arm_spe_pmu_irq_handler(int irq, void *dev)
+ {
+ 	struct perf_output_handle *handle = dev;
+ 	struct perf_event *event = handle->event;
+ 	enum arm_spe_pmu_buf_fault_action act;
+ 
+-	if (!perf_get_aux(handle))
+-		return IRQ_NONE;
++	spe_diag_dump_status("IRQ_HANDLER ENTER");
++	disable_percpu_irq(irq);
++	return IRQ_HANDLED;
+ 
+ 	act = arm_spe_pmu_buf_get_fault_act(handle);
+ 	if (act == SPE_PMU_BUF_FAULT_ACT_SPURIOUS)
+@@ -917,9 +957,17 @@
+ 		write_sysreg_s(reg, SYS_PMSICR_EL1);
+ 	}
+ 
++	spe_diag_dump_status("START BEFORE ENABLE");
++
+ 	reg = arm_spe_event_to_pmscr(event);
+ 	isb();
+ 	write_sysreg_s(reg, SYS_PMSCR_EL1);
++	isb();
++
++	spe_diag_dump_status("START AFTER ENABLE");
++
++	/* Keep IRQ disabled as requested for diagnostic testing */
++	disable_percpu_irq(spe_pmu->irq);
+ }
+ 
+ static void arm_spe_pmu_stop(struct perf_event *event, int flags)
+@@ -928,6 +976,8 @@
+ 	struct hw_perf_event *hwc = &event->hw;
+ 	struct perf_output_handle *handle = this_cpu_ptr(spe_pmu->handle);
+ 
++	spe_diag_dump_status("STOP BEFORE DISABLE");
++
+ 	/* If we're already stopped, then nothing to do */
+ 	if (hwc->state & PERF_HES_STOPPED)
+ 		return;
+@@ -1234,12 +1284,12 @@
+ 	spe_pmu->features |= SPE_PMU_FEAT_DEV_PROBED;
+ }
+ 
+-static void __arm_spe_pmu_reset_local(void)
++static void __arm_spe_pmu_reset_local(int irq)
+ {
+-	/*
+-	 * This is probably overkill, as we have no idea where we're
+-	 * draining any buffered data to...
+-	 */
++	/* Stop limit register first */
++	write_sysreg_s(0, SYS_PMBLIMITR_EL1);
++	isb();
++
+ 	arm_spe_pmu_disable_and_drain_local();
+ 
+ 	/* Reset the buffer base pointer */
+@@ -1255,8 +1305,10 @@
+ {
+ 	struct arm_spe_pmu *spe_pmu = info;
+ 
+-	__arm_spe_pmu_reset_local();
+-	enable_percpu_irq(spe_pmu->irq, IRQ_TYPE_NONE);
++	spe_diag_dump_status("SETUP_ONE START");
++	__arm_spe_pmu_reset_local(spe_pmu->irq);
++	disable_percpu_irq(spe_pmu->irq);
++	spe_diag_dump_status("SETUP_ONE END");
+ }
+ 
+ static void __arm_spe_pmu_stop_one(void *info)
+@@ -1264,7 +1316,8 @@
+ 	struct arm_spe_pmu *spe_pmu = info;
+ 
+ 	disable_percpu_irq(spe_pmu->irq);
+-	__arm_spe_pmu_reset_local();
++	__arm_spe_pmu_reset_local(spe_pmu->irq);
++	spe_diag_dump_status("STOP_ONE END");
+ }
+ 
+ static int arm_spe_pmu_cpu_startup(unsigned int cpu, struct hlist_node *node)
+@@ -1272,8 +1325,10 @@
+ 	struct arm_spe_pmu *spe_pmu;
+ 
+ 	spe_pmu = hlist_entry_safe(node, struct arm_spe_pmu, hotplug_node);
+-	if (!cpumask_test_cpu(cpu, &spe_pmu->supported_cpus))
++	if (!cpumask_test_cpu(cpu, &spe_pmu->supported_cpus)) {
++		disable_percpu_irq(spe_pmu->irq);
+ 		return 0;
++	}
+ 
+ 	__arm_spe_pmu_setup_one(spe_pmu);
+ 	return 0;
+@@ -1362,6 +1417,8 @@
+ 
+ static int arm_spe_pmu_device_probe(struct platform_device *pdev)
+ {
++	spe_diag_init_mmio();
++	spe_diag_dump_status("DEV_PROBE START");
+ 	int ret;
+ 	struct arm_spe_pmu *spe_pmu;
+ 	struct device *dev = &pdev->dev;

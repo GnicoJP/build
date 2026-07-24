@@ -39,8 +39,12 @@
 			linux,default-trigger = "panic";
 		};
 	};
-
-
+	spe-pmu {
+		compatible = "arm,statistical-profiling-extension-v1";
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_PPI 5 IRQ_TYPE_LEVEL_HIGH &ppi_cluster1>;
+		interrupt-affinity = <&cpu4>, <&cpu5>, <&cpu6>, <&cpu7>;
+	};
 };
 
 /* Exposed on 40-pin header (blue-colored pins 27:SCL3 28:SDA3) - aliased to i2c1 in Collabora/upstream DT */
@@ -71,4 +75,8 @@
 			drive-strength-microamp = <1000>;
 		};
 	};
+};
+
+&mmc0 {
+	status = "disabled";
 };
